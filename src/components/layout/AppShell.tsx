@@ -7,6 +7,7 @@ import { ScriptManagement } from '../flow/ScriptManagement'
 import { TechnicalDesk } from '../flow/TechnicalDesk'
 import { OperatorDesk } from '../flow/OperatorDesk'
 import { MigrateBanner } from '../flow/MigrateBanner'
+import { SyncLoginBanner } from '../flow/SyncLoginBanner'
 
 const NAV: { id: NavKey; label: string; kicker: string }[] = [
   {
@@ -83,6 +84,7 @@ export function AppShell() {
           </div>
         )}
         {syncError && <p className="sync-error">{syncError}</p>}
+        <SyncLoginBanner />
         <MigrateBanner />
         <nav className="side-nav flow-nav">
           {NAV.map((item) => (

@@ -242,6 +242,7 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     const user = await signInWithGoogle()
     set({ driveUser: user, syncError: null, hydrated: false })
     await get().hydrate()
+    get().refreshLocalMigrateHint()
   },
 
   signOut: async () => {
@@ -303,14 +304,37 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   hydrate: async () => {
     if (isDriveMode) {
       if (!getDriveUser()) {
-        set({ hydrated: true, obras: [], scripts: [] })
+        set({ hydrated: false })
+        // Cargar datos locales mientras no hay sesión Google
+        let raw: string | null = null
+        try {
+          raw = localStorage.getItem(LS_KEY)
+        } catch {
+          /* privado */
+        }
+        if (raw) {
+          try {
+            const p = JSON.parse(raw) as PersistedFlowV1
+            if (p.version === 1) {
+              set({ obras: p.obras || [], scripts: p.scripts || [] })
+            }
+          } catch {
+            /* JSON inválido */
+          }
+        }
+        set({ hydrated: true, driveUser: null })
+        get().refreshLocalMigrateHint()
         return
       }
       try {
         const data = await loadDriveData()
+        const local = peekLocalData()
+        const driveEmpty =
+          !(data?.obras?.length ?? 0) && !(data?.scripts?.length ?? 0)
+        const useLocal = driveEmpty && local
         set({
-          obras: data?.obras ?? [],
-          scripts: data?.scripts ?? [],
+          obras: useLocal ? local.obras : (data?.obras ?? []),
+          scripts: useLocal ? local.scripts : (data?.scripts ?? []),
           hydrated: true,
           syncError: null,
           driveUser: getDriveUser(),

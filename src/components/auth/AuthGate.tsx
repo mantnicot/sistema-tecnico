@@ -4,6 +4,8 @@ import { isDriveMode } from '../../lib/googleConfig'
 import { useTavaStore } from '../../store/tavaStore'
 import { AppShell } from '../layout/AppShell'
 import { TheaterBackdrop } from '../ui/TheaterBackdrop'
+import { peekLocalData } from '../../lib/localData'
+import { describeLocalDataForMigrate } from '../../lib/migrateToDrive'
 
 function AuthScreen() {
   const signInWithGoogle = useTavaStore((s) => s.signInWithGoogle)
@@ -36,6 +38,12 @@ function AuthScreen() {
           Tu música, guiones y marcas se guardan en una carpeta <strong>TAVA</strong> de tu
           Google Drive. Accede desde cualquier dispositivo con la misma cuenta.
         </p>
+        {describeLocalDataForMigrate() && (
+          <p className="auth-hint auth-hint--highlight">
+            En este PC hay datos locales ({describeLocalDataForMigrate()}). Al entrar podrás
+            subirlos a Drive con un clic.
+          </p>
+        )}
         {msg && <p className="auth-msg">{msg}</p>}
         <button type="button" className="btn primary auth-google-btn" disabled={busy} onClick={submit}>
           {busy ? 'Conectando…' : 'Entrar con Google'}
@@ -70,6 +78,9 @@ export function AuthGate() {
   }
 
   if (isDriveMode && !driveUser) {
+    if (peekLocalData()) {
+      return <AppShell />
+    }
     return <AuthScreen />
   }
 

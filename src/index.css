@@ -1959,7 +1959,12 @@ kbd {
   transition: width 0.25s ease;
 }
 
-.migrate-status {
-  font-size: 0.78rem;
-  color: var(--muted);
+.auth-hint--highlight {
+  color: var(--curtain-deep);
+  font-weight: 500;
+}
+
+.sync-login-banner {
+  border-color: rgba(29, 78, 216, 0.35);
+  background: rgba(29, 78, 216, 0.06);
 }

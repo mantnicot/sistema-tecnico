@@ -1,6 +1,10 @@
 /** Configuración Google Drive / OAuth */
 
-export const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? ''
+const DEFAULT_GOOGLE_CLIENT_ID =
+  '870483472682-t3i95ucgj7qapkumr90bpn4lkrkdlgo0.apps.googleusercontent.com'
+
+export const googleClientId =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() || DEFAULT_GOOGLE_CLIENT_ID
 
 /** Modo sincronizado: archivos y datos en Google Drive del usuario */
 export const isDriveMode = Boolean(googleClientId)
