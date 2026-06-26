@@ -31,8 +31,12 @@ import {
 } from '../lib/googleDrive'
 import { extractTextFromPdfBuffer } from '../lib/pdfText'
 import { playCueCluster } from '../lib/cuePlayback'
-
-const LS_KEY = 'tava-flow-v1'
+import { clearLocalData, LS_KEY, peekLocalData } from '../lib/localData'
+import {
+  describeLocalDataForMigrate,
+  migrateLocalToDrive,
+  type MigrateProgress,
+} from '../lib/migrateToDrive'
 
 const localBlobUrlCache = new Map<string, string>()
 
@@ -99,12 +103,18 @@ type TavaState = {
   operatorPlaying: boolean
   operatorMasterVol: number
   pendingCueOffset: number
+  /** Resumen de datos locales pendientes de subir a Drive */
+  localMigrateHint: string | null
+  migrating: boolean
+  migrateProgress: MigrateProgress | null
 
   initAuth: () => void
   hydrate: () => Promise<void>
   persist: () => void
   signInWithGoogle: () => Promise<void>
   signOut: () => Promise<void>
+  refreshLocalMigrateHint: () => void
+  migrateLocalToDrive: () => Promise<void>
 
   setNav: (n: NavKey) => void
   setTechnicalObraId: (id: string | null) => void
@@ -192,6 +202,9 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   operatorPlaying: false,
   operatorMasterVol: 0.9,
   pendingCueOffset: 0,
+  localMigrateHint: null,
+  migrating: false,
+  migrateProgress: null,
 
   getBlobUrl: (id) => {
     if (isDriveMode) {
@@ -242,7 +255,49 @@ export const useTavaStore = create<TavaState>((set, get) => ({
       operatorObraId: null,
       hydrated: true,
       syncError: null,
+      localMigrateHint: describeLocalDataForMigrate(),
+      migrating: false,
+      migrateProgress: null,
     })
+  },
+
+  refreshLocalMigrateHint: () => {
+    if (!isDriveMode || !getDriveUser()) {
+      set({ localMigrateHint: null })
+      return
+    }
+    set({ localMigrateHint: describeLocalDataForMigrate() })
+  },
+
+  migrateLocalToDrive: async () => {
+    if (!isDriveMode || !getDriveUser()) {
+      set({ syncError: 'Inicia sesión con Google primero.' })
+      return
+    }
+    if (!peekLocalData()) {
+      set({ syncError: 'No hay datos locales en este navegador para migrar.' })
+      return
+    }
+    set({ migrating: true, migrateProgress: null, syncError: null })
+    try {
+      const payload = await migrateLocalToDrive((p) => {
+        set({ migrateProgress: p })
+      })
+      clearLocalData()
+      set({
+        obras: payload.obras,
+        scripts: payload.scripts,
+        localMigrateHint: null,
+        migrating: false,
+        migrateProgress: null,
+        syncError: null,
+      })
+    } catch (e) {
+      set({
+        migrating: false,
+        syncError: e instanceof Error ? e.message : 'Error al migrar a Drive',
+      })
+    }
   },
 
   hydrate: async () => {
@@ -260,6 +315,7 @@ export const useTavaStore = create<TavaState>((set, get) => ({
           syncError: null,
           driveUser: getDriveUser(),
         })
+        get().refreshLocalMigrateHint()
       } catch (e) {
         set({
           hydrated: true,

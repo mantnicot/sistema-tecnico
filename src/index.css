@@ -1924,3 +1924,42 @@ kbd {
   opacity: 0.55;
   pointer-events: none;
 }
+
+.migrate-banner {
+  margin: 0 14px 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-color: rgba(139, 33, 56, 0.35);
+  background: rgba(139, 33, 56, 0.06);
+}
+
+.migrate-desc,
+.migrate-warn {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.migrate-warn {
+  color: var(--curtain-deep);
+}
+
+.migrate-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.migrate-bar {
+  height: 6px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--curtain), var(--curtain-deep));
+  transition: width 0.25s ease;
+}
+
+.migrate-status {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
