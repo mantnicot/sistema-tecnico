@@ -490,8 +490,7 @@ export const useTavaStore = create<TavaState>((set, get) => ({
 
   addScriptPdf: async (title, file) => {
     const scriptId = crypto.randomUUID()
-    const buf = await file.arrayBuffer()
-    const text = await extractTextFromPdfBuffer(buf)
+    const text = await extractTextFromPdfBuffer(await file.arrayBuffer())
     const scriptTitle = title.trim() || file.name.replace(/\.pdf$/i, '')
     const mime = file.type || 'application/pdf'
 
@@ -501,6 +500,7 @@ export const useTavaStore = create<TavaState>((set, get) => ({
         const folder = await getScriptsFolder()
         pdfBlobId = await uploadDriveFile(file.name, mime, file, folder)
       } else {
+        const buf = await file.arrayBuffer()
         pdfBlobId = crypto.randomUUID()
         await putAudioBlob(pdfBlobId, buf, mime)
         setLocalBlobUrl(pdfBlobId, buf, mime)
@@ -514,8 +514,7 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   },
 
   replaceScriptPdf: async (scriptId, file) => {
-    const buf = await file.arrayBuffer()
-    const text = await extractTextFromPdfBuffer(buf)
+    const text = await extractTextFromPdfBuffer(await file.arrayBuffer())
     const prev = get().scripts.find((s) => s.id === scriptId)
     const mime = file.type || 'application/pdf'
 
@@ -536,6 +535,7 @@ export const useTavaStore = create<TavaState>((set, get) => ({
           await deleteAudioBlob(prev.pdfBlobId)
           revokeLocalBlob(prev.pdfBlobId)
         }
+        const buf = await file.arrayBuffer()
         pdfBlobId = crypto.randomUUID()
         await putAudioBlob(pdfBlobId, buf, mime)
         setLocalBlobUrl(pdfBlobId, buf, mime)

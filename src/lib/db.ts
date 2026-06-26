@@ -40,7 +40,7 @@ export async function putAudioBlob(
   const db = await getDB()
   await db.put('audioBlobs', {
     id,
-    data,
+    data: data.slice(0),
     mime,
     createdAt: Date.now(),
   })

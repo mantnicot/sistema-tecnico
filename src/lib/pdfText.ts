@@ -5,7 +5,8 @@ GlobalWorkerOptions.workerSrc = workerSrc
 
 /** Extrae texto de un PDF para teleprompter (100 % local, sin red). */
 export async function extractTextFromPdfBuffer(buf: ArrayBuffer): Promise<string> {
-  const pdf = await getDocument({ data: buf }).promise
+  // pdf.js transfiere el buffer al worker y lo deja detached; usar copia.
+  const pdf = await getDocument({ data: buf.slice(0) }).promise
   const parts: string[] = []
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p)
