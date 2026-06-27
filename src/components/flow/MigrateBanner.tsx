@@ -4,8 +4,7 @@ export function MigrateBanner() {
   const localMigrateHint = useTavaStore((s) => s.localMigrateHint)
   const migrating = useTavaStore((s) => s.migrating)
   const migrateProgress = useTavaStore((s) => s.migrateProgress)
-  const migrateLocalToDrive = useTavaStore((s) => s.migrateLocalToDrive)
-  const obras = useTavaStore((s) => s.obras)
+  const migrateLocalToCloud = useTavaStore((s) => s.migrateLocalToCloud)
 
   if (!localMigrateHint) return null
 
@@ -16,16 +15,11 @@ export function MigrateBanner() {
 
   return (
     <div className="migrate-banner card">
-      <strong>Datos en este PC sin subir a Drive</strong>
+      <strong>Subir trabajo de este PC a la nube</strong>
       <p className="migrate-desc">
-        Tienes trabajo guardado solo en este navegador ({localMigrateHint}).
-        Súbelo a Google Drive para verlo en cualquier dispositivo con la misma cuenta.
+        Tienes datos locales ({localMigrateHint}). Súbelos a Supabase para verlos en cualquier
+        dispositivo con la misma cuenta.
       </p>
-      {obras.length === 0 && !migrating && (
-        <p className="migrate-warn">
-          Tu cuenta de Drive aún no tiene obras cargadas desde aquí.
-        </p>
-      )}
       {migrating && migrateProgress && (
         <div className="migrate-progress">
           <div className="migrate-bar" style={{ width: `${pct}%` }} />
@@ -36,9 +30,9 @@ export function MigrateBanner() {
         type="button"
         className="btn primary btn-sm"
         disabled={migrating}
-        onClick={() => void migrateLocalToDrive()}
+        onClick={() => void migrateLocalToCloud()}
       >
-        {migrating ? 'Subiendo a Drive…' : 'Subir todo a Google Drive'}
+        {migrating ? 'Subiendo…' : 'Subir todo a la nube'}
       </button>
     </div>
   )

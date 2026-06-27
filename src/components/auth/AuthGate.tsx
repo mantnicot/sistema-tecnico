@@ -1,24 +1,34 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { isDriveMode } from '../../lib/googleConfig'
+import { isCloudMode } from '../../lib/supabase'
 import { useTavaStore } from '../../store/tavaStore'
 import { AppShell } from '../layout/AppShell'
 import { TheaterBackdrop } from '../ui/TheaterBackdrop'
 import { peekLocalData } from '../../lib/localData'
-import { describeLocalDataForMigrate } from '../../lib/migrateToDrive'
+import { describeLocalDataForMigrate } from '../../lib/migrateToCloud'
 
 function AuthScreen() {
-  const signInWithGoogle = useTavaStore((s) => s.signInWithGoogle)
+  const signIn = useTavaStore((s) => s.signIn)
+  const signUp = useTavaStore((s) => s.signUp)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [mode, setMode] = useState<'in' | 'up'>('in')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
-  const submit = async () => {
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
     setBusy(true)
     setMsg(null)
     try {
-      await signInWithGoogle()
+      if (mode === 'in') {
+        await signIn(email.trim(), password)
+      } else {
+        await signUp(email.trim(), password)
+        setMsg('Cuenta creada. Si Supabase pide confirmación, revisa tu correo y luego inicia sesión.')
+      }
     } catch (err) {
-      setMsg(err instanceof Error ? err.message : 'Error al conectar con Google')
+      setMsg(err instanceof Error ? err.message : 'Error de autenticación')
     } finally {
       setBusy(false)
     }
@@ -33,24 +43,52 @@ function AuthScreen() {
         animate={{ opacity: 1, y: 0 }}
       >
         <div className="brand-mark auth-mark">TAVA</div>
-        <h1>Control técnico con Google Drive</h1>
+        <h1>Control técnico en la nube</h1>
         <p className="auth-sub">
-          Tu música, guiones y marcas se guardan en una carpeta <strong>TAVA</strong> de tu
-          Google Drive. Accede desde cualquier dispositivo con la misma cuenta.
+          Obras, guiones y música sincronizados con Supabase. La misma cuenta en cualquier
+          dispositivo.
         </p>
         {describeLocalDataForMigrate() && (
           <p className="auth-hint auth-hint--highlight">
-            En este PC hay datos locales ({describeLocalDataForMigrate()}). Al entrar podrás
-            subirlos a Drive con un clic.
+            En este PC hay datos locales ({describeLocalDataForMigrate()}). Tras entrar podrás
+            subirlos con un clic.
           </p>
         )}
-        {msg && <p className="auth-msg">{msg}</p>}
-        <button type="button" className="btn primary auth-google-btn" disabled={busy} onClick={submit}>
-          {busy ? 'Conectando…' : 'Entrar con Google'}
+        <form className="auth-form" onSubmit={submit}>
+          <input
+            className="inp"
+            type="email"
+            placeholder="Correo electrónico"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoComplete="email"
+          />
+          <input
+            className="inp"
+            type="password"
+            placeholder="Contraseña (mín. 6 caracteres)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={6}
+            autoComplete={mode === 'in' ? 'current-password' : 'new-password'}
+          />
+          {msg && <p className="auth-msg">{msg}</p>}
+          <button type="submit" className="btn primary auth-google-btn" disabled={busy}>
+            {busy ? 'Conectando…' : mode === 'in' ? 'Entrar' : 'Crear cuenta'}
+          </button>
+        </form>
+        <button
+          type="button"
+          className="btn ghost auth-toggle"
+          onClick={() => {
+            setMode(mode === 'in' ? 'up' : 'in')
+            setMsg(null)
+          }}
+        >
+          {mode === 'in' ? '¿No tienes cuenta? Regístrate' : '¿Ya tienes cuenta? Inicia sesión'}
         </button>
-        <p className="auth-hint">
-          La app solo accede a archivos que ella misma crea en tu Drive.
-        </p>
       </motion.div>
     </div>
   )
@@ -58,29 +96,27 @@ function AuthScreen() {
 
 export function AuthGate() {
   const authReady = useTavaStore((s) => s.authReady)
-  const driveUser = useTavaStore((s) => s.driveUser)
+  const cloudUser = useTavaStore((s) => s.cloudUser)
   const initAuth = useTavaStore((s) => s.initAuth)
 
   useEffect(() => {
-    if (!isDriveMode) return
-    initAuth()
+    if (!isCloudMode) return
+    return initAuth()
   }, [initAuth])
 
-  if (!authReady) {
+  if (!authReady && isCloudMode) {
     return (
       <div className="app-loading">
         <div className="app-loading-inner">
           <span className="pulse-dot" />
-          <p>Conectando con Google Drive…</p>
+          <p>Conectando con la nube…</p>
         </div>
       </div>
     )
   }
 
-  if (isDriveMode && !driveUser) {
-    if (peekLocalData()) {
-      return <AppShell />
-    }
+  if (isCloudMode && !cloudUser) {
+    if (peekLocalData()) return <AppShell />
     return <AuthScreen />
   }
 

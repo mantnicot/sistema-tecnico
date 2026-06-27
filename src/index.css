@@ -1968,3 +1968,13 @@ kbd {
   border-color: rgba(29, 78, 216, 0.35);
   background: rgba(29, 78, 216, 0.06);
 }
+
+.sync-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sync-login-form .auth-msg {
+  margin: 0;
+}

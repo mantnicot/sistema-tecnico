@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { TheaterBackdrop } from '../ui/TheaterBackdrop'
-import { isDriveMode } from '../../lib/googleConfig'
+import { isCloudMode } from '../../lib/supabase'
 import { useTavaStore, type NavKey } from '../../store/tavaStore'
 import { SoundManagement } from '../flow/SoundManagement'
 import { ScriptManagement } from '../flow/ScriptManagement'
@@ -37,7 +37,7 @@ export function AppShell() {
   const hydrate = useTavaStore((s) => s.hydrate)
   const nav = useTavaStore((s) => s.nav)
   const setNav = useTavaStore((s) => s.setNav)
-  const driveUser = useTavaStore((s) => s.driveUser)
+  const cloudUser = useTavaStore((s) => s.cloudUser)
   const syncError = useTavaStore((s) => s.syncError)
   const signOut = useTavaStore((s) => s.signOut)
 
@@ -51,8 +51,8 @@ export function AppShell() {
         <div className="app-loading-inner">
           <span className="pulse-dot" />
           <p>
-            {isDriveMode
-              ? 'Sincronizando desde Google Drive…'
+            {isCloudMode
+              ? 'Sincronizando desde la nube…'
               : 'Despertando al equipo de luces… y a la base de datos local.'}
           </p>
         </div>
@@ -69,14 +69,14 @@ export function AppShell() {
           <div>
             <h1>Control técnico</h1>
             <p className="brand-tag">
-              {isDriveMode ? 'Google Drive · sincronizado' : '100 % local · sin internet'}
+              {isCloudMode ? 'Nube · Supabase' : '100 % local · sin internet'}
             </p>
           </div>
         </header>
-        {isDriveMode && driveUser && (
+        {isCloudMode && cloudUser && (
           <div className="cloud-user card">
-            <span className="cloud-email" title={driveUser.email}>
-              {driveUser.email}
+            <span className="cloud-email" title={cloudUser.email}>
+              {cloudUser.email}
             </span>
             <button type="button" className="btn ghost btn-sm" onClick={() => void signOut()}>
               Salir

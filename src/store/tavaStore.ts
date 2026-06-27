@@ -9,34 +9,32 @@ import type {
   ScriptDoc,
 } from '../types/tava'
 import { deleteAudioBlob, getAudioBlob, putAudioBlob } from '../lib/db'
-import { loadDriveData, saveDriveData } from '../lib/driveSync'
-import { isDriveMode } from '../lib/googleConfig'
-import {
-  type DriveUser,
-  getDriveUser,
-  initGoogleAuth,
-  signInWithGoogle,
-  signOutGoogle,
-} from '../lib/googleAuth'
-import {
-  deleteDriveFile,
-  getAudioFolder,
-  getCachedDriveBlobUrl,
-  getDrivePreviewUrl,
-  getDriveViewUrl,
-  getScriptsFolder,
-  resetDriveCache,
-  resolveDriveAudioUrl,
-  uploadDriveFile,
-} from '../lib/googleDrive'
-import { extractTextFromPdfBuffer } from '../lib/pdfText'
-import { playCueCluster } from '../lib/cuePlayback'
 import { clearLocalData, LS_KEY, peekLocalData } from '../lib/localData'
 import {
   describeLocalDataForMigrate,
-  migrateLocalToDrive,
+  migrateLocalToCloud,
   type MigrateProgress,
-} from '../lib/migrateToDrive'
+} from '../lib/migrateToCloud'
+import {
+  type CloudUser,
+  getCurrentUserId,
+  getSupabase,
+  isCloudMode,
+  sessionToUser,
+} from '../lib/supabase'
+import {
+  deleteAudioFile,
+  deleteDocumentFile,
+  getCachedStorageUrl,
+  resetStorageCache,
+  resolveAudioUrl,
+  resolveDocumentUrl,
+  uploadAudio,
+  uploadDocument,
+} from '../lib/supabaseStorage'
+import * as api from '../lib/tavaApi'
+import { extractTextFromPdfBuffer } from '../lib/pdfText'
+import { playCueCluster } from '../lib/cuePlayback'
 
 const localBlobUrlCache = new Map<string, string>()
 
@@ -92,7 +90,7 @@ export type NavKey = 'sounds' | 'scripts' | 'technical' | 'operator'
 type TavaState = {
   hydrated: boolean
   authReady: boolean
-  driveUser: DriveUser | null
+  cloudUser: CloudUser | null
   syncError: string | null
   nav: NavKey
   obras: Obra[]
@@ -103,18 +101,18 @@ type TavaState = {
   operatorPlaying: boolean
   operatorMasterVol: number
   pendingCueOffset: number
-  /** Resumen de datos locales pendientes de subir a Drive */
   localMigrateHint: string | null
   migrating: boolean
   migrateProgress: MigrateProgress | null
 
-  initAuth: () => void
+  initAuth: () => () => void
   hydrate: () => Promise<void>
   persist: () => void
-  signInWithGoogle: () => Promise<void>
+  signIn: (email: string, password: string) => Promise<void>
+  signUp: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
   refreshLocalMigrateHint: () => void
-  migrateLocalToDrive: () => Promise<void>
+  migrateLocalToCloud: () => Promise<void>
 
   setNav: (n: NavKey) => void
   setTechnicalObraId: (id: string | null) => void
@@ -124,31 +122,22 @@ type TavaState = {
   addObra: (name: string) => Promise<void>
   renameObra: (id: string, name: string) => Promise<void>
   removeObra: (id: string) => Promise<void>
-
   addTrackToObra: (obraId: string, file: File, displayName: string) => Promise<void>
   renameTrack: (obraId: string, trackId: string, name: string) => Promise<void>
   removeTrackFromObra: (obraId: string, trackId: string) => Promise<void>
   reorderTrack: (obraId: string, from: number, to: number) => Promise<void>
-
   addScriptText: (title: string, text: string) => Promise<void>
   addScriptPdf: (title: string, file: File) => Promise<void>
   replaceScriptPdf: (scriptId: string, file: File) => Promise<void>
   replaceScriptText: (scriptId: string, title: string, text: string) => Promise<void>
   renameScript: (id: string, title: string) => Promise<void>
   removeScript: (id: string) => Promise<void>
-
   linkScriptToObra: (obraId: string, scriptId: string | null) => Promise<void>
   addCue: (
     obraId: string,
-    p: {
-      charOffset: number
-      trackId: string
-      cueName: string
-      mode: CueMode
-    },
+    p: { charOffset: number; trackId: string; cueName: string; mode: CueMode },
   ) => Promise<void>
   removeCue: (obraId: string, cueId: string) => Promise<void>
-
   setOperatorGroupIndex: (i: number) => void
   setOperatorPlaying: (v: boolean) => void
   setOperatorMasterVol: (v: number) => void
@@ -156,7 +145,6 @@ type TavaState = {
   operatorPause: () => void
   operatorAdvance: () => void
   operatorRewind: () => void
-
   getBlobUrl: (blobId: string) => string | undefined
   ensureBlobUrl: (blobId: string, kind: 'audio' | 'document') => Promise<string | undefined>
   getObra: (id: string | null) => Obra | undefined
@@ -165,18 +153,47 @@ type TavaState = {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 function schedulePersist(get: () => TavaState) {
+  if (isCloudMode) return
   if (persistTimer) clearTimeout(persistTimer)
-  persistTimer = setTimeout(() => get().persist(), isDriveMode ? 600 : 350)
+  persistTimer = setTimeout(() => get().persist(), 350)
 }
 
 let activeCluster: { stop: () => void; done: Promise<void> } | null = null
 
-async function resolvePlayUrl(blobId: string, mime = 'audio/mpeg'): Promise<string | undefined> {
-  if (isDriveMode) {
-    const cached = getCachedDriveBlobUrl(blobId)
+async function loadLocalIntoState(set: (p: Partial<TavaState>) => void) {
+  let raw: string | null = null
+  try {
+    raw = localStorage.getItem(LS_KEY)
+  } catch {
+    /* privado */
+  }
+  if (!raw) return
+  try {
+    const p = JSON.parse(raw) as PersistedFlowV1
+    if (p.version !== 1) return
+    const blobIds = new Set<string>()
+    for (const o of p.obras || []) {
+      for (const t of o.tracks || []) blobIds.add(t.blobId)
+    }
+    for (const s of p.scripts || []) {
+      if (s.pdfBlobId) blobIds.add(s.pdfBlobId)
+    }
+    for (const bid of blobIds) {
+      const rec = await getAudioBlob(bid)
+      if (rec) setLocalBlobUrl(bid, rec.data, rec.mime)
+    }
+    set({ obras: p.obras || [], scripts: p.scripts || [] })
+  } catch {
+    /* JSON inválido */
+  }
+}
+
+async function resolvePlayUrl(blobId: string): Promise<string | undefined> {
+  if (isCloudMode) {
+    const cached = getCachedStorageUrl(blobId)
     if (cached) return cached
     try {
-      return await resolveDriveAudioUrl(blobId, mime)
+      return await resolveAudioUrl(blobId)
     } catch {
       return undefined
     }
@@ -190,8 +207,8 @@ async function resolvePlayUrl(blobId: string, mime = 'audio/mpeg'): Promise<stri
 
 export const useTavaStore = create<TavaState>((set, get) => ({
   hydrated: false,
-  authReady: !isDriveMode,
-  driveUser: null,
+  authReady: !isCloudMode,
+  cloudUser: null,
   syncError: null,
   nav: 'sounds',
   obras: [],
@@ -206,22 +223,14 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   migrating: false,
   migrateProgress: null,
 
-  getBlobUrl: (id) => {
-    if (isDriveMode) {
-      const cached = getCachedDriveBlobUrl(id)
-      if (cached) return cached
-      return getDrivePreviewUrl(id)
-    }
-    return localBlobUrlCache.get(id)
-  },
-
+  getBlobUrl: (id) =>
+    isCloudMode ? getCachedStorageUrl(id) : localBlobUrlCache.get(id),
   getObra: (id) => (id ? get().obras.find((o) => o.id === id) : undefined),
   getScript: (id) => (id ? get().scripts.find((s) => s.id === id) : undefined),
 
   ensureBlobUrl: async (blobId, kind) => {
-    if (isDriveMode) {
-      if (kind === 'document') return getDriveViewUrl(blobId)
-      return resolvePlayUrl(blobId)
+    if (isCloudMode) {
+      return kind === 'document' ? resolveDocumentUrl(blobId) : resolvePlayUrl(blobId)
     }
     const hit = localBlobUrlCache.get(blobId)
     if (hit) return hit
@@ -231,59 +240,72 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   },
 
   initAuth: () => {
-    if (!isDriveMode) return
-    void initGoogleAuth().then((user) => {
-      set({ driveUser: user, authReady: true })
+    if (!isCloudMode) return () => {}
+    const sb = getSupabase()
+    const { data } = sb.auth.onAuthStateChange((_event, session) => {
+      set({ cloudUser: sessionToUser(session), authReady: true, hydrated: false })
       void get().hydrate()
     })
+    void sb.auth.getSession().then(({ data: d }) => {
+      set({ cloudUser: sessionToUser(d.session), authReady: true })
+      void get().hydrate()
+    })
+    return () => data.subscription.unsubscribe()
   },
 
-  signInWithGoogle: async () => {
-    const user = await signInWithGoogle()
-    set({ driveUser: user, syncError: null, hydrated: false })
+  signIn: async (email, password) => {
+    const sb = getSupabase()
+    const { error } = await sb.auth.signInWithPassword({ email, password })
+    if (error) throw new Error(error.message)
+    set({ syncError: null, hydrated: false })
     await get().hydrate()
     get().refreshLocalMigrateHint()
   },
 
+  signUp: async (email, password) => {
+    const sb = getSupabase()
+    const { error } = await sb.auth.signUp({ email, password })
+    if (error) throw new Error(error.message)
+    set({ syncError: null })
+  },
+
   signOut: async () => {
-    signOutGoogle()
-    resetDriveCache()
+    if (isCloudMode) await getSupabase().auth.signOut()
+    resetStorageCache()
     set({
-      driveUser: null,
+      cloudUser: null,
       obras: [],
       scripts: [],
       technicalObraId: null,
       operatorObraId: null,
-      hydrated: true,
+      hydrated: false,
       syncError: null,
-      localMigrateHint: describeLocalDataForMigrate(),
       migrating: false,
       migrateProgress: null,
     })
+    await get().hydrate()
   },
 
   refreshLocalMigrateHint: () => {
-    if (!isDriveMode || !getDriveUser()) {
+    if (!isCloudMode || !get().cloudUser) {
       set({ localMigrateHint: null })
       return
     }
     set({ localMigrateHint: describeLocalDataForMigrate() })
   },
 
-  migrateLocalToDrive: async () => {
-    if (!isDriveMode || !getDriveUser()) {
-      set({ syncError: 'Inicia sesión con Google primero.' })
+  migrateLocalToCloud: async () => {
+    if (!isCloudMode || !get().cloudUser) {
+      set({ syncError: 'Inicia sesión primero.' })
       return
     }
     if (!peekLocalData()) {
-      set({ syncError: 'No hay datos locales en este navegador para migrar.' })
+      set({ syncError: 'No hay datos locales en este navegador.' })
       return
     }
     set({ migrating: true, migrateProgress: null, syncError: null })
     try {
-      const payload = await migrateLocalToDrive((p) => {
-        set({ migrateProgress: p })
-      })
+      const payload = await migrateLocalToCloud((p) => set({ migrateProgress: p }))
       clearLocalData()
       set({
         obras: payload.obras,
@@ -296,106 +318,59 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     } catch (e) {
       set({
         migrating: false,
-        syncError: e instanceof Error ? e.message : 'Error al migrar a Drive',
+        syncError: e instanceof Error ? e.message : 'Error al migrar',
       })
     }
   },
 
   hydrate: async () => {
-    if (isDriveMode) {
-      if (!getDriveUser()) {
-        set({ hydrated: false })
-        // Cargar datos locales mientras no hay sesión Google
-        let raw: string | null = null
-        try {
-          raw = localStorage.getItem(LS_KEY)
-        } catch {
-          /* privado */
-        }
-        if (raw) {
-          try {
-            const p = JSON.parse(raw) as PersistedFlowV1
-            if (p.version === 1) {
-              set({ obras: p.obras || [], scripts: p.scripts || [] })
-            }
-          } catch {
-            /* JSON inválido */
-          }
-        }
-        set({ hydrated: true, driveUser: null })
-        get().refreshLocalMigrateHint()
+    if (isCloudMode) {
+      if (!get().cloudUser) {
+        set({ obras: [], scripts: [] })
+        await loadLocalIntoState(set)
+        set({ hydrated: true, localMigrateHint: describeLocalDataForMigrate() })
         return
       }
       try {
-        const data = await loadDriveData()
+        const data = await api.fetchAllData()
         const local = peekLocalData()
-        const driveEmpty =
-          !(data?.obras?.length ?? 0) && !(data?.scripts?.length ?? 0)
-        const useLocal = driveEmpty && local
-        set({
-          obras: useLocal ? local.obras : (data?.obras ?? []),
-          scripts: useLocal ? local.scripts : (data?.scripts ?? []),
-          hydrated: true,
-          syncError: null,
-          driveUser: getDriveUser(),
-        })
+        const cloudEmpty = !(data.obras.length || data.scripts.length)
+        if (cloudEmpty && local) {
+          set({
+            obras: local.obras,
+            scripts: local.scripts,
+            hydrated: true,
+            syncError: null,
+          })
+        } else {
+          set({
+            obras: data.obras,
+            scripts: data.scripts,
+            hydrated: true,
+            syncError: null,
+          })
+        }
         get().refreshLocalMigrateHint()
       } catch (e) {
         set({
           hydrated: true,
-          syncError: e instanceof Error ? e.message : 'Error al leer Google Drive',
-          driveUser: getDriveUser(),
+          syncError: e instanceof Error ? e.message : 'Error al sincronizar',
         })
       }
       return
     }
-
-    let raw: string | null = null
-    try {
-      raw = localStorage.getItem(LS_KEY)
-    } catch {
-      /* privado */
-    }
-    if (raw) {
-      try {
-        const p = JSON.parse(raw) as PersistedFlowV1
-        if (p.version === 1) {
-          const blobIds = new Set<string>()
-          for (const o of p.obras || []) {
-            for (const t of o.tracks || []) blobIds.add(t.blobId)
-          }
-          for (const s of p.scripts || []) {
-            if (s.pdfBlobId) blobIds.add(s.pdfBlobId)
-          }
-          for (const bid of blobIds) {
-            const rec = await getAudioBlob(bid)
-            if (rec) setLocalBlobUrl(bid, rec.data, rec.mime)
-          }
-          set({ obras: p.obras || [], scripts: p.scripts || [] })
-        }
-      } catch {
-        /* JSON inválido */
-      }
-    }
+    await loadLocalIntoState(set)
     set({ hydrated: true })
   },
 
   persist: () => {
+    if (isCloudMode) return
     const s = get()
-    const payload: PersistedFlowV1 = {
-      version: 1,
-      obras: s.obras,
-      scripts: s.scripts,
-    }
-    if (isDriveMode) {
-      if (!getDriveUser()) return
-      void saveDriveData(payload).catch((e) => {
-        set({ syncError: e instanceof Error ? e.message : 'Error al guardar en Drive' })
-      })
-      return
-    }
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(payload))
+      localStorage.setItem(
+        LS_KEY,
+        JSON.stringify({ version: 1, obras: s.obras, scripts: s.scripts } satisfies PersistedFlowV1),
+      )
     } catch {
       /* quota */
     }
@@ -408,35 +383,55 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   setPendingCueOffset: (n) => set({ pendingCueOffset: Math.max(0, n) }),
 
   addObra: async (name) => {
-    const o: Obra = {
-      id: crypto.randomUUID(),
-      name: name.trim() || 'Obra sin título',
-      tracks: [],
-      linkedScriptId: null,
-      cues: [],
-    }
+    const id = crypto.randomUUID()
+    const trimmed = name.trim() || 'Obra sin título'
+    const o: Obra = { id, name: trimmed, tracks: [], linkedScriptId: null, cues: [] }
     set((st) => ({ obras: [...st.obras, o], syncError: null }))
+    if (isCloudMode) {
+      try {
+        const uid = await getCurrentUserId()
+        if (!uid) return
+        await api.createObra(uid, id, trimmed)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error al crear obra' })
+      }
+      return
+    }
     schedulePersist(get)
   },
 
   renameObra: async (id, name) => {
+    const trimmed = name.trim()
     set((st) => ({
-      obras: st.obras.map((o) => (o.id === id ? { ...o, name: name.trim() || o.name } : o)),
-      syncError: null,
+      obras: st.obras.map((o) => (o.id === id ? { ...o, name: trimmed || o.name } : o)),
     }))
+    if (isCloudMode) {
+      try {
+        await api.updateObraName(id, trimmed)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error al renombrar' })
+      }
+      return
+    }
     schedulePersist(get)
   },
 
   removeObra: async (id) => {
     const o = get().obras.find((x) => x.id === id)
     if (!o) return
-    if (isDriveMode) {
+    if (isCloudMode) {
       for (const t of o.tracks) {
         try {
-          await deleteDriveFile(t.blobId)
+          await deleteAudioFile(t.blobId)
         } catch {
-          /* ya borrado */
+          /* noop */
         }
+      }
+      try {
+        await api.deleteObra(id)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error al eliminar' })
+        return
       }
     } else {
       for (const t of o.tracks) {
@@ -448,46 +443,48 @@ export const useTavaStore = create<TavaState>((set, get) => ({
       obras: st.obras.filter((x) => x.id !== id),
       technicalObraId: st.technicalObraId === id ? null : st.technicalObraId,
       operatorObraId: st.operatorObraId === id ? null : st.operatorObraId,
-      syncError: null,
     }))
-    schedulePersist(get)
+    if (!isCloudMode) schedulePersist(get)
   },
 
   addTrackToObra: async (obraId, file, displayName) => {
     const trackId = crypto.randomUUID()
     const mime = file.type || 'audio/mpeg'
     const trackName = displayName.trim() || file.name.replace(/\.[^.]+$/, '')
-
     try {
       let blobId: string
       let url: string
-
-      if (isDriveMode) {
-        const folder = await getAudioFolder(obraId)
-        blobId = await uploadDriveFile(file.name, mime, file, folder)
-        url = await resolveDriveAudioUrl(blobId, mime)
+      if (isCloudMode) {
+        const uid = await getCurrentUserId()
+        if (!uid) return
+        blobId = await uploadAudio(uid, obraId, trackId, file)
+        url = await resolveAudioUrl(blobId)
       } else {
         const buf = await file.arrayBuffer()
         blobId = crypto.randomUUID()
         await putAudioBlob(blobId, buf, mime)
         url = setLocalBlobUrl(blobId, buf, mime)
       }
-
       const durationSec = await audioDuration(url)
       const track: ObraTrack = { id: trackId, name: trackName, blobId, durationSec }
+      if (isCloudMode) {
+        const obra = get().obras.find((o) => o.id === obraId)
+        await api.insertTrack(obraId, track, obra?.tracks.length ?? 0)
+      }
       set((st) => ({
         obras: st.obras.map((o) =>
           o.id === obraId ? { ...o, tracks: [...o.tracks, track] } : o,
         ),
         syncError: null,
       }))
-      schedulePersist(get)
+      if (!isCloudMode) schedulePersist(get)
     } catch (e) {
       set({ syncError: e instanceof Error ? e.message : 'Error al subir pista' })
     }
   },
 
   renameTrack: async (obraId, trackId, name) => {
+    const trimmed = name.trim()
     set((st) => ({
       obras: st.obras.map((o) =>
         o.id !== obraId
@@ -495,21 +492,26 @@ export const useTavaStore = create<TavaState>((set, get) => ({
           : {
               ...o,
               tracks: o.tracks.map((t) =>
-                t.id === trackId ? { ...t, name: name.trim() || t.name } : t,
+                t.id === trackId ? { ...t, name: trimmed || t.name } : t,
               ),
             },
       ),
-      syncError: null,
     }))
+    if (isCloudMode) {
+      try {
+        await api.updateTrackName(trackId, trimmed)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
+      }
+      return
+    }
     schedulePersist(get)
   },
 
   removeTrackFromObra: async (obraId, trackId) => {
     const o = get().obras.find((x) => x.id === obraId)
-    if (!o) return
-    const track = o.tracks.find((t) => t.id === trackId)
+    const track = o?.tracks.find((t) => t.id === trackId)
     const blobId = track?.blobId
-
     set((st) => ({
       obras: st.obras.map((ob) =>
         ob.id !== obraId
@@ -521,40 +523,40 @@ export const useTavaStore = create<TavaState>((set, get) => ({
             },
       ),
     }))
-
-    if (blobId) {
-      if (isDriveMode) {
-        const used = get().obras.some((ob) => ob.tracks.some((t) => t.blobId === blobId))
-        if (!used) {
-          try {
-            await deleteDriveFile(blobId)
-          } catch {
-            /* noop */
-          }
-        }
-      } else {
-        const used = get().obras.some((ob) => ob.tracks.some((t) => t.blobId === blobId))
-        if (!used) {
-          await deleteAudioBlob(blobId)
-          revokeLocalBlob(blobId)
-        }
+    if (isCloudMode) {
+      try {
+        await api.deleteTrack(trackId)
+        if (blobId) await deleteAudioFile(blobId)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
       }
+    } else if (blobId) {
+      const used = get().obras.some((ob) => ob.tracks.some((t) => t.blobId === blobId))
+      if (!used) {
+        await deleteAudioBlob(blobId)
+        revokeLocalBlob(blobId)
+      }
+      schedulePersist(get)
     }
-    set({ syncError: null })
-    schedulePersist(get)
   },
 
   reorderTrack: async (obraId, from, to) => {
+    const obra = get().obras.find((o) => o.id === obraId)
+    if (!obra) return
+    const arr = [...obra.tracks]
+    const [m] = arr.splice(from, 1)
+    arr.splice(to, 0, m)
     set((st) => ({
-      obras: st.obras.map((o) => {
-        if (o.id !== obraId) return o
-        const arr = [...o.tracks]
-        const [m] = arr.splice(from, 1)
-        arr.splice(to, 0, m)
-        return { ...o, tracks: arr }
-      }),
-      syncError: null,
+      obras: st.obras.map((o) => (o.id === obraId ? { ...o, tracks: arr } : o)),
     }))
+    if (isCloudMode) {
+      try {
+        await api.reorderTracks(obraId, arr.map((t) => t.id))
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
+      }
+      return
+    }
     schedulePersist(get)
   },
 
@@ -564,8 +566,18 @@ export const useTavaStore = create<TavaState>((set, get) => ({
       title: title.trim() || 'Guión',
       text,
     }
-    set((st) => ({ scripts: [...st.scripts, script], syncError: null }))
-    schedulePersist(get)
+    if (isCloudMode) {
+      try {
+        const uid = await getCurrentUserId()
+        if (!uid) return
+        await api.createScript(uid, script)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
+        return
+      }
+    }
+    set((st) => ({ scripts: [...st.scripts, script] }))
+    if (!isCloudMode) schedulePersist(get)
   },
 
   addScriptPdf: async (title, file) => {
@@ -573,12 +585,13 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     const text = await extractTextFromPdfBuffer(await file.arrayBuffer())
     const scriptTitle = title.trim() || file.name.replace(/\.pdf$/i, '')
     const mime = file.type || 'application/pdf'
-
     try {
       let pdfBlobId: string
-      if (isDriveMode) {
-        const folder = await getScriptsFolder()
-        pdfBlobId = await uploadDriveFile(file.name, mime, file, folder)
+      let uid: string | null = null
+      if (isCloudMode) {
+        uid = await getCurrentUserId()
+        if (!uid) return
+        pdfBlobId = await uploadDocument(uid, scriptId, file)
       } else {
         const buf = await file.arrayBuffer()
         pdfBlobId = crypto.randomUUID()
@@ -586,8 +599,11 @@ export const useTavaStore = create<TavaState>((set, get) => ({
         setLocalBlobUrl(pdfBlobId, buf, mime)
       }
       const script: ScriptDoc = { id: scriptId, title: scriptTitle, text, pdfBlobId }
+      if (isCloudMode && uid) {
+        await api.createScript(uid, script)
+      }
       set((st) => ({ scripts: [...st.scripts, script], syncError: null }))
-      schedulePersist(get)
+      if (!isCloudMode) schedulePersist(get)
     } catch (e) {
       set({ syncError: e instanceof Error ? e.message : 'Error al subir PDF' })
     }
@@ -597,19 +613,20 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     const text = await extractTextFromPdfBuffer(await file.arrayBuffer())
     const prev = get().scripts.find((s) => s.id === scriptId)
     const mime = file.type || 'application/pdf'
-
     try {
       let pdfBlobId: string
-      if (isDriveMode) {
+      if (isCloudMode) {
+        const uid = await getCurrentUserId()
+        if (!uid) return
         if (prev?.pdfBlobId) {
           try {
-            await deleteDriveFile(prev.pdfBlobId)
+            await deleteDocumentFile(prev.pdfBlobId)
           } catch {
             /* noop */
           }
         }
-        const folder = await getScriptsFolder()
-        pdfBlobId = await uploadDriveFile(file.name, mime, file, folder)
+        pdfBlobId = await uploadDocument(uid, scriptId, file)
+        await api.updateScript(scriptId, { text, pdfBlobId })
       } else {
         if (prev?.pdfBlobId) {
           await deleteAudioBlob(prev.pdfBlobId)
@@ -624,11 +641,10 @@ export const useTavaStore = create<TavaState>((set, get) => ({
         scripts: st.scripts.map((s) =>
           s.id === scriptId ? { ...s, text, pdfBlobId } : s,
         ),
-        syncError: null,
       }))
-      schedulePersist(get)
+      if (!isCloudMode) schedulePersist(get)
     } catch (e) {
-      set({ syncError: e instanceof Error ? e.message : 'Error al reemplazar PDF' })
+      set({ syncError: e instanceof Error ? e.message : 'Error' })
     }
   },
 
@@ -637,8 +653,15 @@ export const useTavaStore = create<TavaState>((set, get) => ({
       scripts: st.scripts.map((s) =>
         s.id === scriptId ? { ...s, title: title.trim() || s.title, text } : s,
       ),
-      syncError: null,
     }))
+    if (isCloudMode) {
+      try {
+        await api.updateScript(scriptId, { title: title.trim(), text })
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
+      }
+      return
+    }
     schedulePersist(get)
   },
 
@@ -647,8 +670,15 @@ export const useTavaStore = create<TavaState>((set, get) => ({
       scripts: st.scripts.map((s) =>
         s.id === id ? { ...s, title: title.trim() || s.title } : s,
       ),
-      syncError: null,
     }))
+    if (isCloudMode) {
+      try {
+        await api.updateScript(id, { title: title.trim() })
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
+      }
+      return
+    }
     schedulePersist(get)
   },
 
@@ -661,19 +691,27 @@ export const useTavaStore = create<TavaState>((set, get) => ({
       ),
     }))
     if (s?.pdfBlobId) {
-      if (isDriveMode) {
+      if (isCloudMode) {
         try {
-          await deleteDriveFile(s.pdfBlobId)
-        } catch {
-          /* noop */
+          await deleteDocumentFile(s.pdfBlobId)
+          await api.deleteScript(id)
+        } catch (e) {
+          set({ syncError: e instanceof Error ? e.message : 'Error' })
         }
       } else {
         await deleteAudioBlob(s.pdfBlobId)
         revokeLocalBlob(s.pdfBlobId)
+        schedulePersist(get)
       }
+    } else if (isCloudMode) {
+      try {
+        await api.deleteScript(id)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
+      }
+    } else {
+      schedulePersist(get)
     }
-    set({ syncError: null })
-    schedulePersist(get)
   },
 
   linkScriptToObra: async (obraId, scriptId) => {
@@ -681,19 +719,27 @@ export const useTavaStore = create<TavaState>((set, get) => ({
       obras: st.obras.map((o) =>
         o.id === obraId ? { ...o, linkedScriptId: scriptId } : o,
       ),
-      syncError: null,
     }))
+    if (isCloudMode) {
+      try {
+        await api.linkScriptToObra(obraId, scriptId)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
+      }
+      return
+    }
     schedulePersist(get)
   },
 
   addCue: async (obraId, p) => {
+    let cue: MusicCue | null = null
     set((st) => ({
       obras: st.obras.map((o) => {
         if (o.id !== obraId) return o
         const maxOrder = o.cues
           .filter((c) => c.charOffset === p.charOffset)
           .reduce((m, c) => Math.max(m, c.order), -1)
-        const cue: MusicCue = {
+        cue = {
           id: crypto.randomUUID(),
           charOffset: p.charOffset,
           trackId: p.trackId,
@@ -703,8 +749,15 @@ export const useTavaStore = create<TavaState>((set, get) => ({
         }
         return { ...o, cues: [...o.cues, cue] }
       }),
-      syncError: null,
     }))
+    if (isCloudMode && cue) {
+      try {
+        await api.insertCue(obraId, cue)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
+      }
+      return
+    }
     schedulePersist(get)
   },
 
@@ -713,8 +766,15 @@ export const useTavaStore = create<TavaState>((set, get) => ({
       obras: st.obras.map((o) =>
         o.id === obraId ? { ...o, cues: o.cues.filter((c) => c.id !== cueId) } : o,
       ),
-      syncError: null,
     }))
+    if (isCloudMode) {
+      try {
+        await api.deleteCue(cueId)
+      } catch (e) {
+        set({ syncError: e instanceof Error ? e.message : 'Error' })
+      }
+      return
+    }
     schedulePersist(get)
   },
 
@@ -742,8 +802,7 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     const groups = buildPlaybackGroups(ob.cues)
     if (!groups.length) return
     get().operatorPause()
-    const idx = get().operatorGroupIndex
-    const g = groups[idx]
+    const g = groups[get().operatorGroupIndex]
     if (!g) return
     const items: { url: string; mode: CueMode }[] = []
     for (const c of g.cues) {
@@ -772,8 +831,6 @@ export const useTavaStore = create<TavaState>((set, get) => ({
 
   operatorRewind: () => {
     get().operatorPause()
-    set((st) => ({
-      operatorGroupIndex: Math.max(0, st.operatorGroupIndex - 1),
-    }))
+    set((st) => ({ operatorGroupIndex: Math.max(0, st.operatorGroupIndex - 1) }))
   },
 }))

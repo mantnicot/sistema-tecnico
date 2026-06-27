@@ -48,7 +48,7 @@ if not exist ".env" (
 
   echo AVISO: No hay archivo .env — la app corre en modo LOCAL.
 
-  echo Para modo Drive: copie .env.example a .env y configure Google Client ID.
+  echo Para modo nube: configure VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY en .env
 
   echo.
 

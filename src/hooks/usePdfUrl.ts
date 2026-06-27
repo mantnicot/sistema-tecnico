@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { isDriveMode } from '../lib/googleConfig'
-import { getDrivePreviewUrl } from '../lib/googleDrive'
+import { isCloudMode } from '../lib/supabase'
 import { useTavaStore } from '../store/tavaStore'
 
 export function usePdfUrl(pdfBlobId: string | null | undefined): string | null {
@@ -13,9 +12,14 @@ export function usePdfUrl(pdfBlobId: string | null | undefined): string | null {
       setUrl(null)
       return
     }
-    if (isDriveMode) {
-      setUrl(getDrivePreviewUrl(pdfBlobId))
-      return
+    if (isCloudMode) {
+      let cancelled = false
+      void ensureBlobUrl(pdfBlobId, 'document').then((u) => {
+        if (!cancelled) setUrl(u ? `${u}#toolbar=0` : null)
+      })
+      return () => {
+        cancelled = true
+      }
     }
     const cached = getBlobUrl(pdfBlobId)
     if (cached) {
@@ -36,10 +40,22 @@ export function usePdfUrl(pdfBlobId: string | null | undefined): string | null {
 
 export function usePdfHref(pdfBlobId: string | null | undefined): string | undefined {
   const getBlobUrl = useTavaStore((s) => s.getBlobUrl)
+  const ensureBlobUrl = useTavaStore((s) => s.ensureBlobUrl)
+  const [href, setHref] = useState<string | undefined>(() =>
+    pdfBlobId && !isCloudMode ? getBlobUrl(pdfBlobId) : undefined,
+  )
 
-  if (!pdfBlobId) return undefined
-  if (isDriveMode) {
-    return `https://drive.google.com/file/d/${pdfBlobId}/view`
-  }
-  return getBlobUrl(pdfBlobId)
+  useEffect(() => {
+    if (!pdfBlobId) {
+      setHref(undefined)
+      return
+    }
+    if (isCloudMode) {
+      void ensureBlobUrl(pdfBlobId, 'document').then(setHref)
+      return
+    }
+    setHref(getBlobUrl(pdfBlobId))
+  }, [pdfBlobId, getBlobUrl, ensureBlobUrl])
+
+  return href
 }

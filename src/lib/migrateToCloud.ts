@@ -1,7 +1,8 @@
 import type { Obra, PersistedFlowV1, ScriptDoc } from '../types/tava'
 import { getAudioBlob } from './db'
-import { saveDriveData } from './driveSync'
-import { getAudioFolder, getScriptsFolder, uploadDriveFile } from './googleDrive'
+import { getCurrentUserId } from './supabase'
+import { importFullProject } from './tavaApi'
+import { uploadAudio, uploadDocument } from './supabaseStorage'
 import { localDataSummary, peekLocalData } from './localData'
 
 export type MigrateProgress = {
@@ -22,9 +23,12 @@ function safeName(name: string): string {
   return name.replace(/[<>:"/\\|?*]/g, '_').trim() || 'archivo'
 }
 
-export async function migrateLocalToDrive(
+export async function migrateLocalToCloud(
   onProgress?: (p: MigrateProgress) => void,
 ): Promise<PersistedFlowV1> {
+  const userId = await getCurrentUserId()
+  if (!userId) throw new Error('Inicia sesión primero.')
+
   const local = peekLocalData()
   if (!local) throw new Error('No hay obras ni guiones guardados en este navegador.')
 
@@ -38,32 +42,18 @@ export async function migrateLocalToDrive(
   const jobs: Job[] = []
   for (const o of obras) {
     for (const t of o.tracks) {
-      jobs.push({
-        kind: 'track',
-        obraId: o.id,
-        trackId: t.id,
-        blobId: t.blobId,
-        name: t.name,
-      })
+      jobs.push({ kind: 'track', obraId: o.id, trackId: t.id, blobId: t.blobId, name: t.name })
     }
   }
   for (const s of scripts) {
     if (s.pdfBlobId) {
-      jobs.push({
-        kind: 'pdf',
-        scriptId: s.id,
-        blobId: s.pdfBlobId,
-        name: s.title,
-      })
+      jobs.push({ kind: 'pdf', scriptId: s.id, blobId: s.pdfBlobId, name: s.title })
     }
   }
 
-  const total = jobs.length + 1
+  const total = jobs.length + 2
   let done = 0
-
-  const tick = (label: string) => {
-    onProgress?.({ label, done, total })
-  }
+  const tick = (label: string) => onProgress?.({ label, done, total })
 
   tick('Preparando migración…')
 
@@ -74,7 +64,6 @@ export async function migrateLocalToDrive(
       tick(`Omitido (no encontrado): ${job.name}`)
       continue
     }
-
     const mime = rec.mime || (job.kind === 'pdf' ? 'application/pdf' : 'audio/mpeg')
     const blob = new Blob([rec.data], { type: mime })
     const ext = extFromMime(mime, job.kind === 'pdf' ? 'pdf' : 'mp3')
@@ -83,28 +72,26 @@ export async function migrateLocalToDrive(
     tick(`Subiendo: ${job.name}`)
 
     if (job.kind === 'track') {
-      const folder = await getAudioFolder(job.obraId)
-      const fileId = await uploadDriveFile(fileName, mime, blob, folder)
+      const path = await uploadAudio(userId, job.obraId, job.trackId, blob, fileName)
       const obra = obras.find((o) => o.id === job.obraId)
       const track = obra?.tracks.find((t) => t.id === job.trackId)
-      if (track) track.blobId = fileId
+      if (track) track.blobId = path
     } else {
-      const folder = await getScriptsFolder()
-      const fileId = await uploadDriveFile(fileName, mime, blob, folder)
+      const path = await uploadDocument(userId, job.scriptId, blob, fileName)
       const script = scripts.find((s) => s.id === job.scriptId)
-      if (script) script.pdfBlobId = fileId
+      if (script) script.pdfBlobId = path
     }
-
     done++
     onProgress?.({ label: `Listo: ${job.name}`, done, total })
   }
 
+  tick('Guardando obras y marcas en la nube…')
+  await importFullProject(userId, obras, scripts)
+  done++
+
   const payload: PersistedFlowV1 = { version: 1, obras, scripts }
-  tick('Guardando índice en Drive…')
-  await saveDriveData(payload)
   done++
   onProgress?.({ label: 'Migración completada', done, total })
-
   return payload
 }
 

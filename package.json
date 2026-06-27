@@ -11,6 +11,7 @@
     "electron": "electron electron/main.cjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.108.2",
     "framer-motion": "^12.38.0",
     "idb": "^8.0.3",
     "pdfjs-dist": "^5.7.284",
