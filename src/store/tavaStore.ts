@@ -257,15 +257,27 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     const sb = getSupabase()
     const { error } = await sb.auth.signInWithPassword({ email, password })
     if (error) throw new Error(error.message)
-    set({ syncError: null, hydrated: false })
+    const { data: sessionData } = await sb.auth.getSession()
+    set({ cloudUser: sessionToUser(sessionData.session), syncError: null, hydrated: false })
     await get().hydrate()
-    get().refreshLocalMigrateHint()
+    if (peekLocalData()) {
+      get().refreshLocalMigrateHint()
+      await get().migrateLocalToCloud()
+    }
   },
 
   signUp: async (email, password) => {
     const sb = getSupabase()
-    const { error } = await sb.auth.signUp({ email, password })
+    const { data, error } = await sb.auth.signUp({ email, password })
     if (error) throw new Error(error.message)
+    if (data.session) {
+      set({ cloudUser: sessionToUser(data.session), syncError: null, hydrated: false })
+      await get().hydrate()
+      if (peekLocalData()) {
+        get().refreshLocalMigrateHint()
+        await get().migrateLocalToCloud()
+      }
+    }
     set({ syncError: null })
   },
 
@@ -328,7 +340,7 @@ export const useTavaStore = create<TavaState>((set, get) => ({
       if (!get().cloudUser) {
         set({ obras: [], scripts: [] })
         await loadLocalIntoState(set)
-        set({ hydrated: true, localMigrateHint: describeLocalDataForMigrate() })
+        set({ hydrated: true, localMigrateHint: null })
         return
       }
       try {
@@ -383,6 +395,10 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   setPendingCueOffset: (n) => set({ pendingCueOffset: Math.max(0, n) }),
 
   addObra: async (name) => {
+    if (isCloudMode && !get().cloudUser) {
+      set({ syncError: 'Inicia sesión para guardar en la nube.' })
+      return
+    }
     const id = crypto.randomUUID()
     const trimmed = name.trim() || 'Obra sin título'
     const o: Obra = { id, name: trimmed, tracks: [], linkedScriptId: null, cues: [] }
@@ -448,6 +464,10 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   },
 
   addTrackToObra: async (obraId, file, displayName) => {
+    if (isCloudMode && !get().cloudUser) {
+      set({ syncError: 'Inicia sesión para guardar en la nube.' })
+      return
+    }
     const trackId = crypto.randomUUID()
     const mime = file.type || 'audio/mpeg'
     const trackName = displayName.trim() || file.name.replace(/\.[^.]+$/, '')
@@ -561,6 +581,10 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   },
 
   addScriptText: async (title, text) => {
+    if (isCloudMode && !get().cloudUser) {
+      set({ syncError: 'Inicia sesión para guardar en la nube.' })
+      return
+    }
     const script: ScriptDoc = {
       id: crypto.randomUUID(),
       title: title.trim() || 'Guión',
@@ -581,6 +605,10 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   },
 
   addScriptPdf: async (title, file) => {
+    if (isCloudMode && !get().cloudUser) {
+      set({ syncError: 'Inicia sesión para guardar en la nube.' })
+      return
+    }
     const scriptId = crypto.randomUUID()
     const text = await extractTextFromPdfBuffer(await file.arrayBuffer())
     const scriptTitle = title.trim() || file.name.replace(/\.pdf$/i, '')

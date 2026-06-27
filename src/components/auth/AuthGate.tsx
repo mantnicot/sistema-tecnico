@@ -50,8 +50,8 @@ function AuthScreen() {
         </p>
         {describeLocalDataForMigrate() && (
           <p className="auth-hint auth-hint--highlight">
-            En este PC hay datos locales ({describeLocalDataForMigrate()}). Tras entrar podrás
-            subirlos con un clic.
+            En este navegador hay datos locales ({describeLocalDataForMigrate()}). Al entrar se
+            subirán automáticamente a la nube.
           </p>
         )}
         <form className="auth-form" onSubmit={submit}>

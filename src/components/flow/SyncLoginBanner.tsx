@@ -38,7 +38,7 @@ export function SyncLoginBanner() {
       <strong>Sincronizar con la nube</strong>
       <p className="migrate-desc">
         {localHint
-          ? `Datos en este PC: ${localHint}. Entra para subirlos y usarlos en cualquier dispositivo.`
+          ? `Datos en este navegador: ${localHint}. Al entrar se suben solos a la nube.`
           : 'Entra o crea cuenta para guardar en la nube.'}
       </p>
       <form className="sync-login-form" onSubmit={submit}>
