@@ -9,25 +9,39 @@ import { OperatorDesk } from '../flow/OperatorDesk'
 import { MigrateBanner } from '../flow/MigrateBanner'
 import { SyncLoginBanner } from '../flow/SyncLoginBanner'
 
-const NAV: { id: NavKey; label: string; kicker: string }[] = [
+const NAV: {
+  id: NavKey
+  label: string
+  short: string
+  icon: string
+  kicker: string
+}[] = [
   {
     id: 'sounds',
     label: 'Gestión de sonidos',
+    short: 'Sonidos',
+    icon: '♪',
     kicker: 'Crea obras, sube MP3 y ordena pistas antes del ensayo',
   },
   {
     id: 'scripts',
     label: 'Gestión de guiones',
+    short: 'Guiones',
+    icon: '📜',
     kicker: 'Texto o PDF: el texto alimenta el teleprompter con marcas',
   },
   {
     id: 'technical',
     label: 'Gestión técnica',
+    short: 'Marcas',
+    icon: '📍',
     kicker: 'Clic + arrastre: coloca cada corte en el punto exacto del guión',
   },
   {
     id: 'operator',
     label: 'Técnico',
+    short: 'Cabina',
+    icon: '▶',
     kicker: 'Lista de marcas, Play/Pausa y volumen para la función',
   },
 ]
@@ -60,17 +74,68 @@ export function AppShell() {
     )
   }
 
+  const cloudTag = isCloudMode ? 'Nube · Supabase' : '100 % local · sin internet'
+  const activeNav = NAV.find((n) => n.id === nav)
+
   return (
     <div className="app-root flow-app">
       <TheaterBackdrop />
+
+      <header className="mobile-header">
+        <div className="mobile-header-top">
+          <div className="mobile-brand">
+            <span className="brand-mark mobile-mark">TAVA</span>
+            <div>
+              <h1>Control técnico</h1>
+              <p className="brand-tag">{cloudTag}</p>
+            </div>
+          </div>
+          {isCloudMode && cloudUser && (
+            <button
+              type="button"
+              className="btn ghost btn-sm mobile-signout"
+              onClick={() => void signOut()}
+            >
+              Salir
+            </button>
+          )}
+        </div>
+
+        <nav className="mobile-tab-nav" aria-label="Secciones">
+          {NAV.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`mobile-tab ${nav === item.id ? 'active' : ''}`}
+              onClick={() => setNav(item.id)}
+              aria-current={nav === item.id ? 'page' : undefined}
+            >
+              <span className="mobile-tab-icon" aria-hidden>
+                {item.icon}
+              </span>
+              <span className="mobile-tab-label">{item.short}</span>
+            </button>
+          ))}
+        </nav>
+
+        {(syncError || (isCloudMode && !cloudUser)) && (
+          <details className="mobile-extras" open={Boolean(syncError)}>
+            <summary>Cuenta y sincronización</summary>
+            <div className="mobile-extras-body">
+              {syncError && <p className="sync-error">{syncError}</p>}
+              <SyncLoginBanner />
+              <MigrateBanner />
+            </div>
+          </details>
+        )}
+      </header>
+
       <aside className="app-sidebar flow-sidebar">
         <header className="brand flow-brand">
           <div className="brand-mark">TAVA</div>
           <div>
             <h1>Control técnico</h1>
-            <p className="brand-tag">
-              {isCloudMode ? 'Nube · Supabase' : '100 % local · sin internet'}
-            </p>
+            <p className="brand-tag">{cloudTag}</p>
           </div>
         </header>
         {isCloudMode && cloudUser && (
@@ -105,7 +170,14 @@ export function AppShell() {
           </span>
         </footer>
       </aside>
+
       <main className="app-main flow-main">
+        <div className="mobile-page-title">
+          <span className="mobile-page-icon" aria-hidden>
+            {activeNav?.icon}
+          </span>
+          <h2>{activeNav?.label}</h2>
+        </div>
         {nav === 'sounds' && <SoundManagement />}
         {nav === 'scripts' && <ScriptManagement />}
         {nav === 'technical' && <TechnicalDesk />}

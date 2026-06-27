@@ -18,6 +18,8 @@ type Props = {
   metaVariant?: 'technical' | 'operator'
   /** Si se define, cada marca muestra una equis para quitarla del guión (solo gestión técnica). */
   onRemoveCue?: (cueId: string) => void
+  /** En cabina: centra la marca activa al cambiar de reproducción. */
+  autoFollowPlayback?: boolean
 }
 
 function clusterAt(offset: number, cues: MusicCue[]) {
@@ -88,6 +90,7 @@ export function TeleprompterPins({
   showDocumentMeta = false,
   metaVariant = 'technical',
   onRemoveCue,
+  autoFollowPlayback = false,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -96,6 +99,17 @@ export function TeleprompterPins({
     if (!el) return
     if (Math.abs(el.scrollTop - scrollTop) > 2) el.scrollTop = scrollTop
   }, [scrollTop])
+
+  useEffect(() => {
+    if (!autoFollowPlayback || followPlaybackOffset == null) return
+    const root = scrollRef.current
+    if (!root) return
+    const marker = root.querySelector<HTMLElement>(
+      `[data-offset="${followPlaybackOffset}"]`,
+    )
+    if (!marker) return
+    marker.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [autoFollowPlayback, followPlaybackOffset])
 
   const cueOffsets = [...new Set(cues.map((c) => c.charOffset))]
   const extras: number[] = []
