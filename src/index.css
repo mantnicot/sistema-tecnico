@@ -1788,6 +1788,98 @@ kbd {
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+  justify-content: center;
+}
+
+.op-play-btn {
+  flex-shrink: 0;
+  width: 58px;
+  height: 58px;
+  min-height: 58px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  box-shadow: 0 4px 18px rgba(139, 33, 56, 0.32);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  transition: transform 0.12s ease, box-shadow 0.15s ease;
+}
+
+.op-play-btn svg {
+  width: 28px;
+  height: 28px;
+  fill: currentColor;
+  display: block;
+}
+
+.op-play-btn.is-playing svg {
+  width: 24px;
+  height: 24px;
+}
+
+.op-play-btn:hover:not(:disabled) {
+  transform: scale(1.04);
+  box-shadow: 0 6px 22px rgba(139, 33, 56, 0.4);
+}
+
+.op-play-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.op-nav-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 64px;
+  padding: 8px 10px;
+}
+
+.op-nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.op-nav-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+  display: block;
+}
+
+.op-nav-text {
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.op-fade-btn {
+  width: 100%;
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  font-weight: 600;
+  background: rgba(13, 148, 136, 0.12);
+  border-color: rgba(13, 148, 136, 0.35);
+  color: var(--curtain-deep);
+}
+
+.op-fade-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.op-fade-btn:disabled {
+  opacity: 0.4;
 }
 
 .op-tp {
@@ -2331,7 +2423,7 @@ kbd {
 
   /* Cabina: teleprompter arriba, reproductor fijo abajo */
   .flow-panel.operator {
-    padding-bottom: calc(200px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(220px + env(safe-area-inset-bottom, 0px));
   }
 
   .op-layout {
@@ -2512,10 +2604,10 @@ kbd {
 
   .op-play-row {
     margin-top: 0;
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    gap: 8px;
+    display: flex;
+    gap: 12px;
     align-items: center;
+    justify-content: center;
   }
 
   .op-nav-btn {
@@ -2525,11 +2617,12 @@ kbd {
     gap: 2px;
     padding: 8px 6px;
     min-height: 52px;
+    min-width: 56px;
   }
 
-  .op-nav-icon {
-    font-size: 1.2rem;
-    line-height: 1;
+  .op-nav-icon svg {
+    width: 24px;
+    height: 24px;
   }
 
   .op-nav-text {
@@ -2538,16 +2631,25 @@ kbd {
   }
 
   .op-play-btn {
-    width: 64px;
-    height: 64px;
-    min-height: 64px;
-    padding: 0;
-    border-radius: 50%;
-    font-size: 1.5rem;
-    display: grid;
-    place-items: center;
-    justify-self: center;
+    width: 68px;
+    height: 68px;
+    min-height: 68px;
     box-shadow: 0 6px 24px rgba(139, 33, 56, 0.35);
+  }
+
+  .op-play-btn svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  .op-play-btn.is-playing svg {
+    width: 26px;
+    height: 26px;
+  }
+
+  .op-fade-btn {
+    margin-top: 8px;
+    min-height: 48px;
   }
 
   .op-obra-pick {

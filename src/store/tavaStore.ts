@@ -34,7 +34,7 @@ import {
 } from '../lib/supabaseStorage'
 import * as api from '../lib/tavaApi'
 import { extractTextFromPdfBuffer } from '../lib/pdfText'
-import { playCueCluster } from '../lib/cuePlayback'
+import { playCueCluster, warmCueAudio, clearWarmCache } from '../lib/cuePlayback'
 
 const localBlobUrlCache = new Map<string, string>()
 
@@ -143,6 +143,8 @@ type TavaState = {
   setOperatorMasterVol: (v: number) => void
   operatorPlay: () => Promise<void>
   operatorPause: () => void
+  operatorFadeOut: () => Promise<void>
+  prefetchOperatorCue: () => Promise<void>
   operatorAdvance: () => void
   operatorRewind: () => void
   getBlobUrl: (blobId: string) => string | undefined
@@ -158,7 +160,30 @@ function schedulePersist(get: () => TavaState) {
   persistTimer = setTimeout(() => get().persist(), 350)
 }
 
-let activeCluster: { stop: () => void; done: Promise<void> } | null = null
+let activeCluster: ReturnType<typeof playCueCluster> | null = null
+let playSession = 0
+
+async function resolveCueItems(
+  ob: Obra,
+  cues: MusicCue[],
+): Promise<{ url: string; mode: CueMode; cacheKey: string }[]> {
+  const pairs = cues
+    .map((c) => {
+      const tr = ob.tracks.find((t) => t.id === c.trackId)
+      return tr ? { cue: c, track: tr } : null
+    })
+    .filter((x): x is { cue: MusicCue; track: ObraTrack } => Boolean(x))
+
+  const resolved = await Promise.all(
+    pairs.map(async ({ cue, track }) => {
+      const url = await resolvePlayUrl(track.blobId)
+      return url ? { url, mode: cue.mode, cacheKey: track.blobId } : null
+    }),
+  )
+  return resolved.filter((x): x is { url: string; mode: CueMode; cacheKey: string } =>
+    Boolean(x),
+  )
+}
 
 async function loadLocalIntoState(set: (p: Partial<TavaState>) => void) {
   let raw: string | null = null
@@ -284,6 +309,9 @@ export const useTavaStore = create<TavaState>((set, get) => ({
   signOut: async () => {
     if (isCloudMode) await getSupabase().auth.signOut()
     resetStorageCache()
+    clearWarmCache()
+    activeCluster?.stop()
+    activeCluster = null
     set({
       cloudUser: null,
       obras: [],
@@ -390,8 +418,11 @@ export const useTavaStore = create<TavaState>((set, get) => ({
 
   setNav: (n) => set({ nav: n }),
   setTechnicalObraId: (id) => set({ technicalObraId: id }),
-  setOperatorObraId: (id) =>
-    set({ operatorObraId: id, operatorGroupIndex: 0, operatorPlaying: false }),
+  setOperatorObraId: (id) => {
+    get().operatorPause()
+    set({ operatorObraId: id, operatorGroupIndex: 0, operatorPlaying: false })
+    void get().prefetchOperatorCue()
+  },
   setPendingCueOffset: (n) => set({ pendingCueOffset: Math.max(0, n) }),
 
   addObra: async (name) => {
@@ -812,6 +843,7 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     const max = Math.max(0, groups.length - 1)
     set({ operatorGroupIndex: Math.max(0, Math.min(max, i)), operatorPlaying: false })
     get().operatorPause()
+    void get().prefetchOperatorCue()
   },
 
   setOperatorPlaying: (v) => set({ operatorPlaying: v }),
@@ -819,9 +851,20 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     set({ operatorMasterVol: Math.max(0, Math.min(1, v)) }),
 
   operatorPause: () => {
+    playSession++
     activeCluster?.stop()
     activeCluster = null
     set({ operatorPlaying: false })
+  },
+
+  prefetchOperatorCue: async () => {
+    const ob = get().getObra(get().operatorObraId ?? null)
+    if (!ob) return
+    const groups = buildPlaybackGroups(ob.cues)
+    const g = groups[get().operatorGroupIndex]
+    if (!g) return
+    const items = await resolveCueItems(ob, g.cues)
+    await Promise.all(items.map((it) => warmCueAudio(it.url, it.cacheKey)))
   },
 
   operatorPlay: async () => {
@@ -832,20 +875,42 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     get().operatorPause()
     const g = groups[get().operatorGroupIndex]
     if (!g) return
-    const items: { url: string; mode: CueMode }[] = []
-    for (const c of g.cues) {
-      const tr = ob.tracks.find((t) => t.id === c.trackId)
-      if (!tr) continue
-      const url = await resolvePlayUrl(tr.blobId)
-      if (!url) continue
-      items.push({ url, mode: c.mode })
-    }
-    if (!items.length) return
-    activeCluster = playCueCluster(items, get().operatorMasterVol)
+
+    const session = ++playSession
     set({ operatorPlaying: true })
-    await activeCluster.done
-    activeCluster = null
-    set({ operatorPlaying: false })
+
+    const items = await resolveCueItems(ob, g.cues)
+    if (session !== playSession) return
+    if (!items.length) {
+      set({ operatorPlaying: false })
+      return
+    }
+
+    await Promise.all(items.map((it) => warmCueAudio(it.url, it.cacheKey)))
+    if (session !== playSession) return
+
+    activeCluster = playCueCluster(items, get().operatorMasterVol)
+    try {
+      await activeCluster.done
+    } finally {
+      if (session === playSession) {
+        activeCluster = null
+        set({ operatorPlaying: false })
+        void get().prefetchOperatorCue()
+      }
+    }
+  },
+
+  operatorFadeOut: async () => {
+    if (!activeCluster) return
+    set({ operatorPlaying: true })
+    try {
+      await activeCluster.fadeOut(1200)
+    } finally {
+      activeCluster = null
+      set({ operatorPlaying: false })
+      void get().prefetchOperatorCue()
+    }
   },
 
   operatorAdvance: () => {
@@ -855,10 +920,12 @@ export const useTavaStore = create<TavaState>((set, get) => ({
     set((st) => ({
       operatorGroupIndex: Math.min(Math.max(0, n - 1), st.operatorGroupIndex + 1),
     }))
+    void get().prefetchOperatorCue()
   },
 
   operatorRewind: () => {
     get().operatorPause()
     set((st) => ({ operatorGroupIndex: Math.max(0, st.operatorGroupIndex - 1) }))
+    void get().prefetchOperatorCue()
   },
 }))

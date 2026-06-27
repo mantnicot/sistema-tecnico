@@ -1,8 +1,48 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useTavaStore, buildPlaybackGroups } from '../../store/tavaStore'
 import { TeleprompterPins } from './TeleprompterPins'
 import { usePdfUrl } from '../../hooks/usePdfUrl'
+
+function IconPlay() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  )
+}
+
+function IconPause() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path d="M6 5h4v14H6zm8 0h4v14h-4z" />
+    </svg>
+  )
+}
+
+function IconPrev() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path d="M6 6h2v12H6zm3.5 6 8.5 6V6z" />
+    </svg>
+  )
+}
+
+function IconNext() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path d="M16 18h2V6h-2zm-11-6 8.5-6v12z" />
+    </svg>
+  )
+}
+
+function IconFadeOut() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path d="M4 18h2V8H4v10zm4 0h2V11H8v7zm4 0h2V14h-2v4zm4 0h2V6h-2v12z" />
+    </svg>
+  )
+}
 
 export function OperatorDesk() {
   const obras = useTavaStore((s) => s.obras)
@@ -15,6 +55,8 @@ export function OperatorDesk() {
   const setOperatorMasterVol = useTavaStore((s) => s.setOperatorMasterVol)
   const operatorPlay = useTavaStore((s) => s.operatorPlay)
   const operatorPause = useTavaStore((s) => s.operatorPause)
+  const operatorFadeOut = useTavaStore((s) => s.operatorFadeOut)
+  const prefetchOperatorCue = useTavaStore((s) => s.prefetchOperatorCue)
   const operatorAdvance = useTavaStore((s) => s.operatorAdvance)
   const operatorRewind = useTavaStore((s) => s.operatorRewind)
   const getObra = useTavaStore((s) => s.getObra)
@@ -33,6 +75,11 @@ export function OperatorDesk() {
 
   const nowLabel = current?.cues.map((c) => c.cueName).join(' + ') || '—'
   const nextLabel = next?.cues.map((c) => c.cueName).join(' + ') || '—'
+
+  useEffect(() => {
+    if (!operatorObraId) return
+    void prefetchOperatorCue()
+  }, [operatorObraId, operatorGroupIndex, prefetchOperatorCue])
 
   return (
     <motion.section
@@ -226,14 +273,14 @@ export function OperatorDesk() {
                 onClick={() => operatorRewind()}
                 aria-label="Marca anterior"
               >
-                <span className="op-nav-icon" aria-hidden>
-                  ⏮
+                <span className="op-nav-icon">
+                  <IconPrev />
                 </span>
                 <span className="op-nav-text">Anterior</span>
               </button>
               <button
                 type="button"
-                className="btn xl primary op-play-btn"
+                className={`btn primary op-play-btn ${operatorPlaying ? 'is-playing' : ''}`}
                 disabled={!groups.length}
                 onClick={() => {
                   if (operatorPlaying) operatorPause()
@@ -241,7 +288,7 @@ export function OperatorDesk() {
                 }}
                 aria-label={operatorPlaying ? 'Pausar' : 'Reproducir'}
               >
-                {operatorPlaying ? '⏸' : '▶'}
+                {operatorPlaying ? <IconPause /> : <IconPlay />}
               </button>
               <button
                 type="button"
@@ -250,12 +297,21 @@ export function OperatorDesk() {
                 onClick={() => operatorAdvance()}
                 aria-label="Marca siguiente"
               >
-                <span className="op-nav-icon" aria-hidden>
-                  ⏭
+                <span className="op-nav-icon">
+                  <IconNext />
                 </span>
                 <span className="op-nav-text">Siguiente</span>
               </button>
             </div>
+            <button
+              type="button"
+              className="btn secondary op-fade-btn"
+              disabled={!operatorPlaying}
+              onClick={() => void operatorFadeOut()}
+            >
+              <IconFadeOut />
+              <span>Fade out ahora</span>
+            </button>
           </div>
         </div>
       )}
